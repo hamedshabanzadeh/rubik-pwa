@@ -1,0 +1,2352 @@
+<!DOCTYPE html>
+<!--
+PRODUCTION / PWA ARCHITECTURE REQUIREMENT
+
+Final target: Offline-first PWA hosted via GitHub Pages.
+
+After the initial installation/load, all core gameplay must work
+without an internet connection, including:
+- Cube interaction
+- Scramble
+- Reset
+- Timer and move counter
+- Solve detection
+- Personal records
+- Result UI
+
+No core gameplay feature may require a runtime network connection.
+
+Three.js, the Scrambler, and all other required runtime assets must
+eventually be stored locally in the repository and cached by the
+PWA Service Worker.
+
+Internet should only be required for:
+1. Initial installation/load
+2. Future application updates
+3. Features inherently requiring a network, such as sending a shared result
+
+IMPORTANT:
+All future refactoring, production audits, and architectural changes
+must preserve this offline-first requirement.
+
+PWA TODO BEFORE FINAL RELEASE:
+- Add a Startup Failure Screen for THREE/WebGL renderer initialization failure.
+- Never leave the user on a blank/black screen if 3D initialization fails.
+- Remove temporary development/TODO architecture comments after all listed
+  release requirements are implemented and verified, then run the final smoke test.
+-->
+
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>مکعب روبیک سه‌بعدی — قابل بهم‌ریختن</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#111318; height:100%; touch-action:none; overscroll-behavior:none; }
+  #info {
+    position:absolute; bottom:64px; left:50%; transform:translateX(-50%); z-index:10;
+    font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+    color:#e8e6e1; background:rgba(255,255,255,0.07); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    padding:10px 14px; border-radius:10px; font-size:12.5px; line-height:1.5;
+    border:1px solid rgba(255,255,255,0.16); box-shadow:0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.06);
+    display:flex; flex-direction:column; gap:8px;
+    opacity:0; visibility:hidden; pointer-events:none;
+    transform:translate(-50%, 8px);
+    transition:opacity .18s ease, transform .18s ease, visibility .18s ease;
+  }
+  #info.open {
+    opacity:1; visibility:visible; pointer-events:auto;
+    transform:translate(-50%, 0);
+  }
+  #helpToggle {
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%); z-index:11;
+    font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+    width:116px; height:38px; box-sizing:border-box;
+    padding:0 12px;
+    font-size:13px; font-weight:600;
+    color:#e8e6e1;
+    background:rgba(255,255,255,0.07);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,0.16);
+    border-radius:10px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.06);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    transition:transform .12s ease, background .12s ease;
+  }
+  #helpToggle:hover { background:rgba(255,255,255,0.10); }
+  #helpToggle:active { transform:translateX(-50%) scale(.96); }
+  #info b{color:#fff}
+  .hint { display:flex; align-items:center; gap:9px; }
+  .hint svg { flex:0 0 auto; opacity:0.9; }
+  #moveCounter {
+    position:absolute; top:14px; left:14px; z-index:10;
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    color:#e8e6e1;
+    background:rgba(255,255,255,0.07);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    width:220px; height:52px; box-sizing:border-box;
+    padding:0 18px; border-radius:14px;
+    font-size:14px; font-weight:600;
+    border:1px solid rgba(255,255,255,0.16);
+    box-shadow:0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.06);
+    display:flex; align-items:center; justify-content:center;
+    user-select:none;
+  }
+  #timerDisplay {
+    position:absolute; top:76px; left:14px; z-index:10;
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    color:#e8e6e1;
+    background:rgba(255,255,255,0.07);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    width:220px; height:52px; box-sizing:border-box;
+    padding:0 18px; border-radius:14px;
+    font-size:14px; font-weight:600;
+    border:1px solid rgba(255,255,255,0.16);
+    box-shadow:0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.06);
+    display:flex; align-items:center; justify-content:center;
+    text-align:center; user-select:none;
+    direction:rtl;
+  }
+  #controls {
+    position:absolute; top:14px; right:14px; z-index:10;
+    display:grid;
+    grid-template-columns:220px;
+    grid-template-rows:52px 52px;
+    gap:10px;
+  }
+  .btn {
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    width:220px; height:52px; box-sizing:border-box;
+    padding:0 18px; border-radius:14px;
+    border:1px solid rgba(255,255,255,0.18);
+    cursor:pointer; font-weight:600; font-size:14px; letter-spacing:0.2px;
+    display:flex; align-items:center; justify-content:center;
+    transition:transform 0.12s ease, opacity 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn:disabled { opacity:0.45; cursor:default; }
+  .top-card {
+    position:relative;
+    justify-content:flex-start !important;
+    padding-inline:18px 58px !important;
+    gap:10px;
+  }
+  .top-card::before {
+    content:"";
+    position:absolute;
+    left:18px;
+    width:24px;
+    height:24px;
+    background-repeat:no-repeat;
+    background-position:center;
+    background-size:24px 24px;
+    opacity:0.95;
+  }
+  #moveCounter,
+  #timerDisplay {
+    opacity:0.78;
+    box-shadow:0 6px 18px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.035);
+    cursor:default;
+  }
+  #scrambleBtn,
+  #resetBtn {
+    background:rgba(255,255,255,0.11);
+    border-color:rgba(255,255,255,0.22);
+    box-shadow:0 9px 28px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.09);
+    cursor:pointer;
+  }
+  #scrambleBtn:hover,
+  #resetBtn:hover {
+    background:rgba(255,255,255,0.16);
+  }
+  #scrambleBtn:active,
+  #resetBtn:active {
+    transform:scale(0.97);
+    box-shadow:0 4px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.07);
+  }
+  #moveCounter::before {
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23E8E6E1' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='6' cy='6' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='12' cy='6' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='18' cy='6' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='6' cy='12' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='12' cy='12' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='18' cy='12' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='6' cy='18' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='12' cy='18' r='1.4' fill='%23E8E6E1'/%3E%3Ccircle cx='18' cy='18' r='1.4' fill='%23E8E6E1'/%3E%3C/svg%3E");
+  }
+  #timerDisplay::before {
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23E8E6E1' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 7v5l3 2'/%3E%3C/svg%3E");
+  }
+  #scrambleBtn::before {
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23E8E6E1' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h4l3 4 3-4h6'/%3E%3Cpath d='M18 5l2 2-2 2'/%3E%3Cpath d='M4 17h4l3-4 3 4h6'/%3E%3Cpath d='M18 15l2 2-2 2'/%3E%3C/svg%3E");
+  }
+  #resetBtn::before {
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23E8E6E1' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='M12 3l7 4v10l-7 4-7-4V7l7-4z'/%3E%3Cpath d='M5 7l7 4 7-4M12 11v10'/%3E%3C/svg%3E");
+  }
+  #scrambleBtn { background:rgba(255,255,255,0.07); color:#e8e6e1; border:1px solid rgba(255,255,255,0.16); box-shadow:0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.06); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+  #resetBtn { background:rgba(255,255,255,0.07); color:#e8e6e1; border:1px solid rgba(255,255,255,0.16); box-shadow:0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.06); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+  canvas { display:block; }
+  @media (max-width: 640px) {
+    #moveCounter,
+    #timerDisplay,
+    #controls .btn {
+      width:calc(50vw - 20px);
+      height:44px;
+      border-radius:12px;
+      font-size:12.5px;
+      padding-inline:12px 46px !important;
+    }
+    .top-card::before {
+      left:14px;
+      width:20px;
+      height:20px;
+      background-size:20px 20px;
+    }
+    #moveCounter { top:12px; left:12px; }
+    #timerDisplay { top:64px; left:12px; }
+    #controls {
+      top:12px; right:12px;
+      grid-template-columns:calc(50vw - 20px);
+      grid-template-rows:44px 44px;
+      gap:8px;
+    }
+    #info {
+      top:auto; bottom:60px; left:12px; right:12px;
+      transform:translateY(8px);
+      font-size:12px; padding:8px 10px;
+    }
+    #info.open { transform:translateY(0); }
+    #helpToggle { bottom:12px; }
+  }
+
+  /* Final interaction hierarchy — intentionally last so it overrides earlier card styles */
+  #moveCounter,
+  #timerDisplay {
+    background:rgba(255,255,255,0.045) !important;
+    border-color:rgba(255,255,255,0.10) !important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,0.025) !important;
+    opacity:0.72;
+    cursor:default;
+  }
+
+  #scrambleBtn,
+  #resetBtn {
+    background:rgba(255,255,255,0.14) !important;
+    border-color:rgba(255,255,255,0.30) !important;
+    box-shadow:
+      0 8px 24px rgba(0,0,0,0.24),
+      inset 0 1px 0 rgba(255,255,255,0.13) !important;
+    opacity:1;
+    cursor:pointer;
+  }
+
+  #scrambleBtn::after,
+  #resetBtn::after {
+    content:"›";
+    position:absolute;
+    right:16px;
+    top:50%;
+    transform:translateY(-52%);
+    font-size:22px;
+    line-height:1;
+    color:rgba(232,230,225,0.72);
+    pointer-events:none;
+  }
+
+  #scrambleBtn:hover,
+  #resetBtn:hover {
+    background:rgba(255,255,255,0.20) !important;
+    border-color:rgba(255,255,255,0.38) !important;
+  }
+
+  #scrambleBtn:active,
+  #resetBtn:active {
+    transform:scale(0.97);
+    background:rgba(255,255,255,0.24) !important;
+  }
+
+  #scrambleBtn:disabled,
+  #resetBtn:disabled {
+    opacity:.46 !important;
+    cursor:default !important;
+    pointer-events:none !important;
+    transform:none !important;
+  }
+
+  @media (max-width:640px) {
+    #scrambleBtn::after,
+    #resetBtn::after {
+      right:12px;
+      font-size:19px;
+    }
+  }
+
+  /* ---------- Stage 11: solve result modal ---------- */
+  #solveResultBackdrop {
+    position:fixed; inset:0; z-index:100;
+    display:flex; align-items:center; justify-content:center;
+    padding:20px; box-sizing:border-box;
+    background:rgba(4,6,10,0.52);
+    backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px);
+    opacity:0; visibility:hidden; pointer-events:none;
+    transition:opacity .2s ease, visibility .2s ease;
+  }
+  #solveResultBackdrop.open { opacity:1; visibility:visible; pointer-events:auto; }
+  #solveResultModal {
+    position:relative;
+    width:min(360px, calc(100vw - 32px));
+    box-sizing:border-box;
+    padding:28px 24px 22px;
+    border-radius:16px;
+    color:#e8e6e1;
+    background:rgba(24,27,34,0.78);
+    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+    border:1px solid rgba(255,255,255,0.16);
+    box-shadow:0 24px 70px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.06);
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    text-align:center;
+    transform:translateY(10px) scale(.98);
+    transition:transform .2s ease;
+  }
+  #solveResultBackdrop.open #solveResultModal { transform:translateY(0) scale(1); }
+  #solveResultClose {
+    position:absolute; top:10px; left:10px;
+    width:34px; height:34px;
+    border:0; border-radius:10px;
+    display:flex; align-items:center; justify-content:center;
+    color:rgba(232,230,225,0.8);
+    background:transparent;
+    font-size:25px; line-height:1; cursor:pointer;
+  }
+  #solveResultClose:hover { background:rgba(255,255,255,0.07); }
+  #solveResultTitle {
+    margin:2px 32px 22px;
+    font-size:21px; font-weight:750; line-height:1.5; color:#fff;
+  }
+  #solveResultStats {
+    display:flex; flex-direction:column; gap:10px;
+    margin-bottom:22px; font-size:15px; line-height:1.7;
+  }
+  .solve-result-row {
+    display:flex; align-items:center; justify-content:space-between;
+    gap:18px; padding:9px 2px;
+    border-bottom:1px solid rgba(255,255,255,0.07);
+  }
+  .solve-result-row:last-child { border-bottom:0; }
+  .solve-result-label { color:rgba(232,230,225,0.72); }
+  .solve-result-value { color:#fff; font-weight:700; direction:ltr; }
+  #solveResultActions { display:grid; gap:10px; }
+  .solve-result-btn {
+    width:100%; min-height:46px; box-sizing:border-box;
+    border-radius:12px;
+    font-family:inherit; font-size:14px; font-weight:700;
+    cursor:pointer;
+    transition:transform .12s ease, background .12s ease, border-color .12s ease;
+  }
+  .solve-result-btn:active { transform:scale(.98); }
+  #playAgainBtn {
+    border:1px solid rgba(255,255,255,0.22);
+    color:#111318; background:#e8e6e1;
+  }
+  #shareResultBtn {
+    border:1px solid rgba(255,255,255,0.17);
+    color:#e8e6e1; background:rgba(255,255,255,0.08);
+  }
+  #shareResultBtn:hover { background:rgba(255,255,255,0.12); }
+  #shareResultBtn[data-copied="true"] {
+    border-color:rgba(255,255,255,0.28);
+    background:rgba(255,255,255,0.14);
+  }
+  .solve-time-value-wrap{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+  #solveNewRecord{display:none;color:#4ade80;font-size:12px;font-weight:750;direction:rtl;white-space:nowrap}
+  #solveNewRecord.visible{display:inline}
+  #solveBestRow{display:none}
+  #solveBestRow.visible{display:flex}
+  @media (max-width:640px) {
+    #solveResultModal {
+      width:min(340px, calc(100vw - 28px));
+      padding:26px 20px 20px;
+      border-radius:14px;
+    }
+    #solveResultTitle { font-size:19px; margin-bottom:18px; }
+  }
+
+  /* Stage 15: portrait-only on touch-first mobile/tablet devices */
+  #portraitOnlyNotice {
+    position:fixed; inset:0; z-index:1000;
+    display:none; align-items:center; justify-content:center;
+    box-sizing:border-box; padding:28px;
+    background:#111318; color:#e8e6e1;
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    text-align:center;
+  }
+  #portraitOnlyNotice .portrait-only-card {
+    width:min(360px, calc(100vw - 48px));
+    box-sizing:border-box; padding:24px 20px;
+    border-radius:16px;
+    background:rgba(255,255,255,0.07);
+    border:1px solid rgba(255,255,255,0.16);
+    box-shadow:0 12px 36px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.06);
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  }
+  #portraitOnlyNotice .portrait-only-icon { font-size:38px; line-height:1; margin-bottom:14px; }
+  #portraitOnlyNotice .portrait-only-title { font-size:17px; font-weight:750; line-height:1.7; }
+  body.portrait-only-blocked > :not(#portraitOnlyNotice):not(script) { visibility:hidden !important; }
+  body.portrait-only-blocked #portraitOnlyNotice { display:flex !important; visibility:visible !important; }
+
+  /* Startup failure fallback */
+  #startupFailureScreen {
+    position:fixed; inset:0; z-index:2000;
+    display:none; align-items:center; justify-content:center;
+    box-sizing:border-box; padding:24px;
+    background:#111318; color:#e8e6e1;
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    text-align:center;
+  }
+  #startupFailureScreen .startup-failure-card {
+    width:min(440px, calc(100vw - 40px));
+    box-sizing:border-box; padding:28px 22px;
+    border-radius:16px;
+    background:rgba(255,255,255,0.07);
+    border:1px solid rgba(255,255,255,0.16);
+    box-shadow:0 16px 48px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  #startupFailureMessage {
+    margin:0 0 18px; font-size:17px; font-weight:700; line-height:1.8; color:#fff;
+  }
+  #startupRetryBtn {
+    min-width:140px; height:46px; box-sizing:border-box;
+    padding:0 20px; border-radius:12px;
+    border:1px solid rgba(255,255,255,0.22);
+    background:#e8e6e1; color:#111318;
+    font:700 14px system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+    cursor:pointer;
+    transition:transform .12s ease, opacity .12s ease;
+  }
+  #startupRetryBtn:active { transform:scale(.98); }
+  body.startup-failed > :not(#startupFailureScreen):not(script) {
+    visibility:hidden !important;
+  }
+  body.startup-failed #startupFailureScreen {
+    display:flex !important; visibility:visible !important;
+  }
+
+</style>
+<link rel="manifest" href="./manifest.webmanifest">
+</head>
+<body>
+
+<div id="startupFailureScreen" role="alert" aria-live="assertive" aria-hidden="true">
+  <div class="startup-failure-card">
+    <p id="startupFailureMessage">بازی اجرا نشد، لطفاً دوباره تلاش کنید!</p>
+    <button id="startupRetryBtn" type="button">تلاش دوباره</button>
+  </div>
+</div>
+
+<div id="portraitOnlyNotice" aria-hidden="true">
+  <div class="portrait-only-card" role="status">
+    <div class="portrait-only-icon" aria-hidden="true">↻</div>
+    <div class="portrait-only-title">برای ادامه، دستگاه را عمودی کنید</div>
+  </div>
+</div>
+
+<div id="info">
+  <div class="hint">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2v7M12 2l-2.2 2.2M12 2l2.2 2.2" stroke="#e8e6e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M12 22v-7M12 22l-2.2-2.2M12 22l2.2-2.2" stroke="#e8e6e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 12h7M2 12l2.2-2.2M2 12l2.2 2.2" stroke="#e8e6e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M22 12h-7M22 12l-2.2-2.2M22 12l-2.2 2.2" stroke="#e8e6e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span>چرخش مکعب</span>
+  </div>
+  <div class="hint">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M9 4v6M9 4L7 5.6M9 4l2 1.6" stroke="#e8e6e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M15 20v-6M15 20l-2-1.6M15 20l2-1.6" stroke="#e8e6e1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="9" cy="12" r="1.6" fill="#e8e6e1"/>
+      <circle cx="15" cy="12" r="1.6" fill="#e8e6e1"/>
+    </svg>
+    <span>زوم مکعب</span>
+  </div>
+  <div class="hint">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="3" width="7" height="7" rx="1" stroke="#e8e6e1" stroke-width="1.4"/>
+      <rect x="14" y="3" width="7" height="7" rx="1" fill="#e8e6e1" opacity="0.9"/>
+      <rect x="3" y="14" width="7" height="7" rx="1" stroke="#e8e6e1" stroke-width="1.4"/>
+      <rect x="14" y="14" width="7" height="7" rx="1" stroke="#e8e6e1" stroke-width="1.4"/>
+      <path d="M17.5 3.5l3 3M20.5 3.5l-3 3" stroke="#111318" stroke-width="1.3" stroke-linecap="round"/>
+    </svg>
+    <span>روی یک خانه بکشید تا آن لایه بچرخد</span>
+  </div>
+</div>
+<button id="helpToggle" type="button" aria-expanded="false" aria-controls="info">راهنما</button>
+<div id="moveCounter" class="top-card" aria-live="polite">حرکت: ۰</div>
+<div id="timerDisplay" class="top-card" aria-live="polite">زمان: ۰:۰۰.۰</div>
+<div id="controls">
+  <button class="btn top-card" id="scrambleBtn">بهم‌ریختن مکعب</button>
+  <button class="btn top-card" id="resetBtn">مکعب مرتب‌شده</button>
+</div>
+
+<div id="solveResultBackdrop" aria-hidden="true">
+  <div id="solveResultModal" role="dialog" aria-modal="true" aria-labelledby="solveResultTitle">
+    <button id="solveResultClose" type="button" aria-label="بستن">×</button>
+    <div id="solveResultTitle">آفرین، حلش کردی 🏆</div>
+    <div id="solveResultStats">
+      <div class="solve-result-row">
+        <span class="solve-result-label">زمان</span>
+        <span class="solve-time-value-wrap"><span id="solveNewRecord">رکورد جدید</span><span class="solve-result-value" id="solveResultTime">۰:۰۰.۰</span></span>
+      </div>
+      <div class="solve-result-row">
+        <span class="solve-result-label">تعداد حرکت</span>
+        <span class="solve-result-value" id="solveResultMoves">۰</span>
+      </div>
+      <div class="solve-result-row" id="solveBestRow">
+        <span class="solve-result-label">بهترین رکورد</span>
+        <span class="solve-result-value" id="solveBestTime">۰:۰۰.۰</span>
+      </div>
+    </div>
+    <div id="solveResultActions">
+      <button id="playAgainBtn" class="solve-result-btn" type="button">دوباره بازی کن</button>
+      <button id="shareResultBtn" class="solve-result-btn" type="button">اشتراک‌گذاری نتیجه</button>
+    </div>
+  </div>
+</div>
+
+<script src="./vendor/three.min.js"></script>
+<script src="./vendor/scramble_333.js"></script>
+<script>
+const helpToggle = document.getElementById('helpToggle');
+const helpPanel = document.getElementById('info');
+
+function setHelpOpen(isOpen) {
+  helpPanel.classList.toggle('open', isOpen);
+  helpToggle.setAttribute('aria-expanded', String(isOpen));
+  helpToggle.textContent = isOpen ? 'بستن راهنما' : 'راهنما';
+}
+
+helpToggle.addEventListener('pointerdown', (event) => {
+  event.stopPropagation();
+  if (isGameInteractionLocked()) event.preventDefault();
+});
+
+helpToggle.addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (isGameInteractionLocked()) return;
+  setHelpOpen(!helpPanel.classList.contains('open'));
+});
+
+helpPanel.addEventListener('pointerdown', (event) => {
+  event.stopPropagation();
+});
+
+document.addEventListener('pointerdown', (event) => {
+  if (!helpPanel.classList.contains('open')) return;
+  if (helpToggle.contains(event.target) || helpPanel.contains(event.target)) return;
+  setHelpOpen(false);
+}, true);
+
+window.addEventListener('blur', () => {
+  if (helpPanel.classList.contains('open')) setHelpOpen(false);
+});
+
+
+
+// ---------- Stage 15: portrait-only mobile/tablet guard ----------
+const portraitOnlyNotice = document.getElementById('portraitOnlyNotice');
+
+function isTouchFirstMobileOrTablet() {
+  const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches === true;
+  const noHover = window.matchMedia?.('(hover: none)').matches === true;
+  const touchPoints = navigator.maxTouchPoints || 0;
+  return touchPoints > 0 && (coarsePointer || noHover);
+}
+
+function updatePortraitOnlyGuard() {
+  const shouldBlock = isTouchFirstMobileOrTablet() && window.innerWidth > window.innerHeight;
+  document.body.classList.toggle('portrait-only-blocked', shouldBlock);
+  portraitOnlyNotice.setAttribute('aria-hidden', String(!shouldBlock));
+
+  if (shouldBlock) {
+    setHelpOpen(false);
+
+    if (typeof cancelInteractionSafely === 'function') {
+      cancelInteractionSafely();
+    }
+  }
+}
+
+window.addEventListener('resize', updatePortraitOnlyGuard);
+window.addEventListener('orientationchange', () => {
+  [80, 180, 350].forEach(delay => {
+    setTimeout(() => {
+      updatePortraitOnlyGuard();
+      if (typeof syncViewportLayout === 'function') syncViewportLayout();
+    }, delay);
+  });
+});
+requestAnimationFrame(updatePortraitOnlyGuard);
+
+// ---------- Stage 11: solve result + secure system share ----------
+const solveResultBackdrop = document.getElementById('solveResultBackdrop');
+const solveResultClose = document.getElementById('solveResultClose');
+const solveResultTime = document.getElementById('solveResultTime');
+const solveResultMoves = document.getElementById('solveResultMoves');
+const solveNewRecord = document.getElementById('solveNewRecord');
+const solveBestRow = document.getElementById('solveBestRow');
+const solveBestTime = document.getElementById('solveBestTime');
+const playAgainBtn = document.getElementById('playAgainBtn');
+const shareResultBtn = document.getElementById('shareResultBtn');
+
+const PERSONAL_BEST_KEY = 'rubikPersonalBestTimeMs';
+let lastSolveResult = null;
+
+function getPersonalBestTime() {
+  try {
+    const value = Number(localStorage.getItem(PERSONAL_BEST_KEY));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch (error) {
+    console.warn('Personal best could not be read.', error);
+    return null;
+  }
+}
+function savePersonalBestTime(elapsedMs) {
+  try { localStorage.setItem(PERSONAL_BEST_KEY, String(elapsedMs)); return true; }
+  catch (error) { console.warn('Personal best could not be saved.', error); return false; }
+}
+function processRealSolveRecord(elapsedMs) {
+  const previousBest = getPersonalBestTime();
+  if (previousBest === null) {
+    savePersonalBestTime(elapsedMs);
+    return { bestTimeMs:elapsedMs, showBestRecord:false, isNewRecord:false };
+  }
+  const isNewRecord = elapsedMs < previousBest;
+  const bestTimeMs = isNewRecord ? elapsedMs : previousBest;
+  if (isNewRecord) savePersonalBestTime(elapsedMs);
+  return { bestTimeMs, showBestRecord:true, isNewRecord };
+}
+
+function isSolveResultOpen() {
+  return solveResultBackdrop.classList.contains('open');
+}
+
+function openSolveResult(result) {
+  lastSolveResult = { ...result };
+  solveResultTime.textContent = toPersianDigits(formatElapsedTime(result.elapsedMs));
+  solveResultMoves.textContent = toPersianDigits(result.moves);
+  solveNewRecord.classList.toggle('visible', result.isNewRecord === true);
+  solveBestRow.classList.toggle('visible', result.showBestRecord === true);
+  if (result.showBestRecord && Number.isFinite(result.bestTimeMs)) {
+    solveBestTime.textContent = toPersianDigits(formatElapsedTime(result.bestTimeMs));
+  }
+  solveResultBackdrop.classList.add('open');
+  solveResultBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeSolveResult() {
+  solveResultBackdrop.classList.remove('open');
+  solveResultBackdrop.setAttribute('aria-hidden', 'true');
+  shareResultBtn.dataset.copied = 'false';
+  shareResultBtn.textContent = 'اشتراک‌گذاری نتیجه';
+}
+
+solveResultClose.addEventListener('click', closeSolveResult);
+
+solveResultBackdrop.addEventListener('pointerdown', event => {
+  if (event.target === solveResultBackdrop) event.preventDefault();
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && isSolveResultOpen()) closeSolveResult();
+});
+
+function buildShareResult() {
+  if (!lastSolveResult) return null;
+
+  const lines = [
+    'حلش کردم 🏆',
+    `زمان: ${toPersianDigits(formatElapsedTime(lastSolveResult.elapsedMs))}`,
+    `تعداد حرکت: ${toPersianDigits(lastSolveResult.moves)}`
+  ];
+
+  const isWebUrl = location.protocol === 'https:' || location.protocol === 'http:';
+  const url = isWebUrl ? location.href.split('#')[0] : '';
+
+  return {
+    title: 'مکعب روبیک',
+    text: lines.join('\n'),
+    url
+  };
+}
+
+async function copyShareResultFallback(shareData) {
+  const fullText = shareData.url ? `${shareData.text}\n${shareData.url}` : shareData.text;
+
+  try {
+    await navigator.clipboard.writeText(fullText);
+    shareResultBtn.dataset.copied = 'true';
+    shareResultBtn.textContent = 'نتیجه کپی شد';
+    setTimeout(() => {
+      if (!isSolveResultOpen()) return;
+      shareResultBtn.dataset.copied = 'false';
+      shareResultBtn.textContent = 'اشتراک‌گذاری نتیجه';
+    }, 1800);
+    return true;
+  } catch (error) {
+    console.warn('Share and clipboard are unavailable in this browser.', error);
+    return false;
+  }
+}
+
+shareResultBtn.addEventListener('click', async () => {
+  const shareData = buildShareResult();
+  if (!shareData) return;
+
+  if (navigator.share) {
+    try {
+      const payload = { title: shareData.title, text: shareData.text };
+      if (shareData.url) payload.url = shareData.url;
+      await navigator.share(payload);
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      console.warn('Native share failed; falling back to clipboard.', error);
+    }
+  }
+
+  await copyShareResultFallback(shareData);
+});
+
+playAgainBtn.addEventListener('click', async () => {
+  closeSolveResult();
+  await scrambleCube();
+});
+
+// Temporary development shortcut.
+// Keep through all development stages; remove only after final project testing.
+// Double-click / double-tap the Time card to preview the result modal.
+let resultPreviewLastTap = 0;
+
+function openResultPreview() {
+  if (isGameInteractionLocked()) return;
+  // Preview only; never changes the real saved record.
+  // This sample represents a genuine new record:
+  // the current time and the displayed best record must match.
+  openSolveResult({
+    elapsedMs: 71200,
+    moves: 47,
+    bestTimeMs: 71200,
+    showBestRecord: true,
+    isNewRecord: true
+  });
+}
+
+timerDisplay.addEventListener('dblclick', event => {
+  event.preventDefault();
+  openResultPreview();
+});
+
+timerDisplay.addEventListener('touchend', event => {
+  const now = Date.now();
+  if (now - resultPreviewLastTap < 350) {
+    event.preventDefault();
+    resultPreviewLastTap = 0;
+    openResultPreview();
+    return;
+  }
+  resultPreviewLastTap = now;
+}, { passive:false });
+
+
+// ---------- Startup safety check ----------
+const startupFailureScreen = document.getElementById('startupFailureScreen');
+const startupFailureMessage = document.getElementById('startupFailureMessage');
+const startupRetryBtn = document.getElementById('startupRetryBtn');
+
+startupRetryBtn?.addEventListener('click', () => location.reload());
+
+function showStartupFailure(message, error) {
+  if (startupFailureMessage) startupFailureMessage.textContent = 'بازی اجرا نشد، لطفاً دوباره تلاش کنید!';
+  document.body.classList.add('startup-failed');
+  startupFailureScreen?.setAttribute('aria-hidden', 'false');
+  if (error) console.error('Rubik startup failed:', error);
+}
+
+function hasUsableWebGL() {
+  try {
+    const canvas = document.createElement('canvas');
+    return !!(
+      canvas.getContext('webgl2', { failIfMajorPerformanceCaveat:false }) ||
+      canvas.getContext('webgl', { failIfMajorPerformanceCaveat:false }) ||
+      canvas.getContext('experimental-webgl')
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+if (!window.THREE) {
+  const error = new Error('Three.js is unavailable.');
+  showStartupFailure('فایل موتور سه‌بعدی برنامه بارگذاری نشد. صفحه را دوباره بارگذاری کنید. اگر مشکل ادامه داشت، اتصال یا فایل‌های نصب برنامه را بررسی کنید.', error);
+  throw error;
+}
+
+if (!hasUsableWebGL()) {
+  const error = new Error('WebGL is unavailable.');
+  showStartupFailure('WebGL در این مرورگر یا دستگاه در دسترس نیست. شتاب‌دهی سخت‌افزاری/WebGL را فعال کنید یا برنامه را در یک مرورگر سازگار اجرا کنید.', error);
+  throw error;
+}
+
+// ---------- Scene setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111318);
+
+const camera = new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100);
+
+// Fit the cube to the screen regardless of aspect ratio (narrow phones, wide tablets, etc.)
+const CUBE_RADIUS = 2.7; // approx bounding sphere of the 3x3 cube incl. gaps
+function computeFitDistance(aspect) {
+  const vFov = camera.fov * Math.PI / 180;
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+  const distV = CUBE_RADIUS / Math.sin(vFov / 2);
+  const distH = CUBE_RADIUS / Math.sin(hFov / 2);
+  return Math.max(distV, distH) * 1.15; // small margin
+}
+
+const initialDir = new THREE.Vector3(6.2, 5.4, 7.2).normalize();
+let fitDistance = computeFitDistance(window.innerWidth / window.innerHeight);
+camera.position.copy(initialDir).multiplyScalar(fitDistance);
+camera.lookAt(0,0,0);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({antialias:true});
+} catch (error) {
+  showStartupFailure('راه‌اندازی موتور گرافیکی سه‌بعدی ناموفق بود. صفحه را دوباره بارگذاری کنید یا برنامه را در یک مرورگر/دستگاه سازگار با WebGL اجرا کنید.', error);
+  throw error;
+}
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+// ---------- Stage 20: dirty-flag rendering ----------
+// Keep the lightweight RAF heartbeat, but only submit a WebGL frame when the scene changed.
+let needsRender = true;
+function requestRender() {
+  needsRender = true;
+}
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x252a32, 0.88));
+scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+const key = new THREE.DirectionalLight(0xffffff, 0.28);
+key.position.set(5,8,6);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.18);
+fill.position.set(-6,3,-4);
+scene.add(fill);
+
+// ---------- Official color scheme (fixed opposite pairs) ----------
+// +X Red, -X Orange | +Y White, -Y Yellow | +Z Green, -Z Blue
+const COL = {
+  R: 0xC41E3A, O: 0xFF5800, W: 0xFFFFFF, Y: 0xFFD500, G: 0x009E60, B: 0x0051BA, K: 0x1a1a1a
+};
+
+const group = new THREE.Group();
+scene.add(group);
+
+// ---------- Visual Polish V4: polished realistic cube ----------
+// The original 0.96 BoxGeometry remains the invisible interaction hitbox.
+// Visible body/stickers are children only, so grid spacing, pivots, snapping,
+// raycasting and logical transforms remain exactly on the original cube system.
+const size = 0.96;
+const geo = new THREE.BoxGeometry(size, size, size);
+
+// Centers stay exactly 1 unit apart. A 0.972 body creates
+// one uniform 0.028 gap between neighboring cubies on every axis.
+// Interaction grid and pivot centers remain unchanged.
+const VISUAL_BODY_SIZE = 0.972;
+const STICKER_SIZE = 0.895;
+const STICKER_RADIUS = 0.050;
+const STICKER_SURFACE = VISUAL_BODY_SIZE / 2 + 0.003;
+
+const visualBodyGeo = new THREE.BoxGeometry(
+  VISUAL_BODY_SIZE,
+  VISUAL_BODY_SIZE,
+  VISUAL_BODY_SIZE
+);
+
+function createRoundedStickerGeometry(size, radius) {
+  const half = size / 2;
+  const r = Math.min(radius, half);
+  const shape = new THREE.Shape();
+
+  shape.moveTo(-half + r, -half);
+  shape.lineTo( half - r, -half);
+  shape.quadraticCurveTo( half, -half,  half, -half + r);
+  shape.lineTo( half,  half - r);
+  shape.quadraticCurveTo( half,  half,  half - r,  half);
+  shape.lineTo(-half + r,  half);
+  shape.quadraticCurveTo(-half,  half, -half,  half - r);
+  shape.lineTo(-half, -half + r);
+  shape.quadraticCurveTo(-half, -half, -half + r, -half);
+
+  return new THREE.ShapeGeometry(shape, 8);
+}
+
+const stickerGeo = createRoundedStickerGeometry(STICKER_SIZE, STICKER_RADIUS);
+
+const interactionMaterial = new THREE.MeshBasicMaterial({
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  colorWrite: false
+});
+
+const visualBodyMaterial = new THREE.MeshStandardMaterial({
+  color: 0x08090b,
+  roughness: 0.72,
+  metalness: 0.0
+});
+
+function stickerMaterial(color) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.68,
+    metalness: 0.0,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
+}
+
+const visualStickerMaterials = Object.freeze({
+  R: stickerMaterial(COL.R),
+  O: stickerMaterial(COL.O),
+  W: stickerMaterial(COL.W),
+  Y: stickerMaterial(COL.Y),
+  G: stickerMaterial(COL.G),
+  B: stickerMaterial(COL.B)
+});
+
+function addVisualSticker(parent, face, colorKey) {
+  const sticker = new THREE.Mesh(stickerGeo, visualStickerMaterials[colorKey]);
+
+  if (face === 'x+') {
+    sticker.position.set(STICKER_SURFACE, 0, 0);
+    sticker.rotation.y = Math.PI / 2;
+  } else if (face === 'x-') {
+    sticker.position.set(-STICKER_SURFACE, 0, 0);
+    sticker.rotation.y = -Math.PI / 2;
+  } else if (face === 'y+') {
+    sticker.position.set(0, STICKER_SURFACE, 0);
+    sticker.rotation.x = -Math.PI / 2;
+  } else if (face === 'y-') {
+    sticker.position.set(0, -STICKER_SURFACE, 0);
+    sticker.rotation.x = Math.PI / 2;
+  } else if (face === 'z+') {
+    sticker.position.set(0, 0, STICKER_SURFACE);
+  } else if (face === 'z-') {
+    sticker.position.set(0, 0, -STICKER_SURFACE);
+    sticker.rotation.y = Math.PI;
+  }
+
+  parent.add(sticker);
+}
+
+function buildStableCubieVisual(parent, x, y, z) {
+  const body = new THREE.Mesh(visualBodyGeo, visualBodyMaterial);
+  parent.add(body);
+
+  // Same official face mapping as the original Stage 24b:
+  // +X Red, -X Orange | +Y White, -Y Yellow | +Z Green, -Z Blue
+  if (x === 1)  addVisualSticker(parent, 'x+', 'R');
+  if (x === -1) addVisualSticker(parent, 'x-', 'O');
+  if (y === 1)  addVisualSticker(parent, 'y+', 'W');
+  if (y === -1) addVisualSticker(parent, 'y-', 'Y');
+  if (z === 1)  addVisualSticker(parent, 'z+', 'G');
+  if (z === -1) addVisualSticker(parent, 'z-', 'B');
+}
+
+const cubies = []; // visual cubies
+
+// ---------- Logical cube state (independent from Three.js) ----------
+const FACE_BY_AXIS = {
+  'x+': 'R', 'x-': 'O',
+  'y+': 'W', 'y-': 'Y',
+  'z+': 'G', 'z-': 'B'
+};
+
+function stickerMapForPosition(x, y, z) {
+  const stickers = {};
+  if (x === 1) stickers.R = 'x+';
+  if (x === -1) stickers.O = 'x-';
+  if (y === 1) stickers.W = 'y+';
+  if (y === -1) stickers.Y = 'y-';
+  if (z === 1) stickers.G = 'z+';
+  if (z === -1) stickers.B = 'z-';
+  return stickers;
+}
+
+function createLogicalCubie(id, x, y, z) {
+  return {
+    id,
+    home: { x, y, z },
+    position: { x, y, z },
+    orientation: {
+      x: { x: 1, y: 0, z: 0 },
+      y: { x: 0, y: 1, z: 0 },
+      z: { x: 0, y: 0, z: 1 }
+    },
+    stickers: stickerMapForPosition(x, y, z)
+  };
+}
+
+const cubeState = {
+  cubies: [],
+  solvedSnapshot: null,
+  isSolved: true
+};
+
+function cloneLogicalState() {
+  return cubeState.cubies.map(c => ({
+    id: c.id,
+    home: { ...c.home },
+    position: { ...c.position },
+    orientation: {
+      x: { ...c.orientation.x },
+      y: { ...c.orientation.y },
+      z: { ...c.orientation.z }
+    },
+    stickers: { ...c.stickers }
+  }));
+}
+
+function resetLogicalState() {
+  cubeState.cubies.forEach(c => {
+    c.position = { ...c.home };
+    c.orientation = {
+      x: { x: 1, y: 0, z: 0 },
+      y: { x: 0, y: 1, z: 0 },
+      z: { x: 0, y: 0, z: 1 }
+    };
+  });
+}
+
+function validateLogicalState() {
+  if (cubeState.cubies.length !== 26) return false;
+  const ids = new Set(cubeState.cubies.map(c => c.id));
+  if (ids.size !== 26) return false;
+  const positions = new Set(cubeState.cubies.map(c => `${c.position.x},${c.position.y},${c.position.z}`));
+  return positions.size === 26;
+}
+
+for (let x = -1; x <= 1; x++) {
+  for (let y = -1; y <= 1; y++) {
+    for (let z = -1; z <= 1; z++) {
+      if (x === 0 && y === 0 && z === 0) continue;
+
+      // Stable parent hitbox: exactly the same size/grid used by Stage 24b.
+      // All visible geometry is attached to this parent and rotates with it.
+      const cubie = new THREE.Mesh(geo, interactionMaterial);
+      cubie.position.set(x, y, z);
+      buildStableCubieVisual(cubie, x, y, z);
+
+      group.add(cubie);
+      const id = `${x},${y},${z}`;
+      const logical = createLogicalCubie(id, x, y, z);
+      cubeState.cubies.push(logical);
+      cubies.push({
+        id,
+        logical,
+        mesh: cubie,
+        initPos: new THREE.Vector3(x,y,z),
+        initQuat: cubie.quaternion.clone()
+      });
+    }
+  }
+}
+
+cubeState.solvedSnapshot = cloneLogicalState();
+console.assert(validateLogicalState(), 'Logical cube state failed validation');
+
+// ---------- Stage 2: Standard logical move engine ----------
+// Coordinate convention inherited from the visual cube:
+// +X=R(red), -X=L(orange), +Y=U(white), -Y=D(yellow), +Z=F(green), -Z=B(blue).
+// direction is a quarter-turn around the positive coordinate axis using the right-hand rule.
+const MOVE_DEFS = Object.freeze({
+  R: Object.freeze({ axis: 'x', layer:  1, direction: -1 }),
+  L: Object.freeze({ axis: 'x', layer: -1, direction:  1 }),
+  U: Object.freeze({ axis: 'y', layer:  1, direction: -1 }),
+  D: Object.freeze({ axis: 'y', layer: -1, direction:  1 }),
+  F: Object.freeze({ axis: 'z', layer:  1, direction: -1 }),
+  B: Object.freeze({ axis: 'z', layer: -1, direction:  1 })
+});
+
+function rotateQuarterVector(v, axis, direction) {
+  const x = v.x, y = v.y, z = v.z;
+  if (axis === 'x') {
+    return direction === 1 ? { x, y: -z, z: y } : { x, y: z, z: -y };
+  }
+  if (axis === 'y') {
+    return direction === 1 ? { x: z, y, z: -x } : { x: -z, y, z: x };
+  }
+  return direction === 1 ? { x: -y, y: x, z } : { x: y, y: -x, z };
+}
+
+function normalizeMove(move) {
+  if (typeof move !== 'string') throw new Error('Move must be a string');
+  const token = move.trim().toUpperCase();
+  const match = token.match(/^([RLUDFB])(2|')?$/);
+  if (!match) throw new Error(`Invalid Rubik move: ${move}`);
+  return { face: match[1], suffix: match[2] || '', token: match[1] + (match[2] || '') };
+}
+
+function moveQuarterTurns(move) {
+  const parsed = normalizeMove(move);
+  if (parsed.suffix === '2') return 2;
+  if (parsed.suffix === "'") return -1;
+  return 1;
+}
+
+function inverseMove(move) {
+  const parsed = normalizeMove(move);
+  if (parsed.suffix === '2') return parsed.token;
+  return parsed.suffix === "'" ? parsed.face : `${parsed.face}'`;
+}
+
+function applyLogicalLayerQuarterTurn(axis, layer, direction, stateCubies = cubeState.cubies) {
+  if (!['x','y','z'].includes(axis)) throw new Error(`Invalid rotation axis: ${axis}`);
+  if (![-1,0,1].includes(layer)) throw new Error(`Invalid layer: ${layer}`);
+  if (![1,-1].includes(direction)) throw new Error(`Invalid quarter-turn direction: ${direction}`);
+
+  stateCubies.forEach(c => {
+    if (c.position[axis] !== layer) return;
+    c.position = rotateQuarterVector(c.position, axis, direction);
+    c.orientation = {
+      x: rotateQuarterVector(c.orientation.x, axis, direction),
+      y: rotateQuarterVector(c.orientation.y, axis, direction),
+      z: rotateQuarterVector(c.orientation.z, axis, direction)
+    };
+  });
+}
+
+function applyQuarterTurnToLogicalCubies(stateCubies, face, turnSign = 1) {
+  const def = MOVE_DEFS[face];
+  if (!def) throw new Error(`Unknown face: ${face}`);
+  applyLogicalLayerQuarterTurn(def.axis, def.layer, def.direction * turnSign, stateCubies);
+}
+
+function applyLogicalMove(move, stateCubies = cubeState.cubies) {
+  const parsed = normalizeMove(move);
+  const turns = moveQuarterTurns(parsed.token);
+  const count = Math.abs(turns);
+  const sign = Math.sign(turns);
+  for (let i = 0; i < count; i++) {
+    applyQuarterTurnToLogicalCubies(stateCubies, parsed.face, sign);
+  }
+  return parsed.token;
+}
+
+function parseMoveSequence(sequence) {
+  if (Array.isArray(sequence)) return sequence.map(m => normalizeMove(m).token);
+  if (typeof sequence !== 'string') throw new Error('Move sequence must be a string or array');
+  const trimmed = sequence.trim();
+  if (!trimmed) return [];
+  return trimmed.split(/\s+/).map(m => normalizeMove(m).token);
+}
+
+function applyLogicalSequence(sequence, stateCubies = cubeState.cubies) {
+  const moves = parseMoveSequence(sequence);
+  moves.forEach(move => applyLogicalMove(move, stateCubies));
+  return moves;
+}
+
+function logicalStateSignature(stateCubies = cubeState.cubies) {
+  return stateCubies
+    .map(c => [
+      c.id,
+      `${c.position.x},${c.position.y},${c.position.z}`,
+      `${c.orientation.x.x},${c.orientation.x.y},${c.orientation.x.z}`,
+      `${c.orientation.y.x},${c.orientation.y.y},${c.orientation.y.z}`,
+      `${c.orientation.z.x},${c.orientation.z.y},${c.orientation.z.z}`
+    ].join('|'))
+    .sort()
+    .join('||');
+}
+
+// ---------- Stage 5: solved-state detection ----------
+function stickerDirection(cubie, localDirection) {
+  const axis = localDirection[0];
+  const sign = localDirection[1] === '+' ? 1 : -1;
+  const basis = cubie.orientation[axis];
+  return {
+    x: basis.x * sign,
+    y: basis.y * sign,
+    z: basis.z * sign
+  };
+}
+
+function directionKey(v) {
+  if (v.x === 1) return 'x+';
+  if (v.x === -1) return 'x-';
+  if (v.y === 1) return 'y+';
+  if (v.y === -1) return 'y-';
+  if (v.z === 1) return 'z+';
+  if (v.z === -1) return 'z-';
+  return null;
+}
+
+function stickerIsOnOuterFace(cubie, direction) {
+  if (direction.x !== 0) return cubie.position.x === direction.x;
+  if (direction.y !== 0) return cubie.position.y === direction.y;
+  if (direction.z !== 0) return cubie.position.z === direction.z;
+  return false;
+}
+
+function isLogicalCubeSolved(stateCubies = cubeState.cubies) {
+  const faces = {
+    'x+': [], 'x-': [],
+    'y+': [], 'y-': [],
+    'z+': [], 'z-': []
+  };
+
+  for (const cubie of stateCubies) {
+    for (const [color, localDirection] of Object.entries(cubie.stickers)) {
+      const direction = stickerDirection(cubie, localDirection);
+      const key = directionKey(direction);
+      if (!key || !stickerIsOnOuterFace(cubie, direction)) return false;
+      faces[key].push(color);
+    }
+  }
+
+  return Object.values(faces).every(colors =>
+    colors.length === 9 && new Set(colors).size === 1
+  );
+}
+
+function isCubeSolved() {
+  return isLogicalCubeSolved();
+}
+
+function updateSolvedState(emitEvent = true) {
+  const solved = isLogicalCubeSolved();
+  const changed = solved !== cubeState.isSolved;
+  cubeState.isSolved = solved;
+
+  if (changed && emitEvent) {
+    window.dispatchEvent(new CustomEvent('rubik-solved-change', {
+      detail: { solved }
+    }));
+  }
+  return solved;
+}
+
+function runSolvedDetectionSelfTests() {
+  const test = cloneLogicalState();
+  console.assert(isLogicalCubeSolved(test), 'Solved-state detector rejected solved cube');
+
+  applyLogicalMove('R', test);
+  console.assert(!isLogicalCubeSolved(test), 'Solved-state detector accepted an R-turned cube');
+  applyLogicalMove("R'", test);
+  console.assert(isLogicalCubeSolved(test), "Solved-state detector did not recover after R R'");
+
+  const rotatedWholeCube = cloneLogicalState();
+  applyLogicalLayerQuarterTurn('x', -1, 1, rotatedWholeCube);
+  applyLogicalLayerQuarterTurn('x', 0, 1, rotatedWholeCube);
+  applyLogicalLayerQuarterTurn('x', 1, 1, rotatedWholeCube);
+  console.assert(isLogicalCubeSolved(rotatedWholeCube), 'Solved-state detector rejected a globally rotated solved cube');
+}
+
+runSolvedDetectionSelfTests();
+
+// ---------- Stage 6: move history ----------
+// User moves and scramble moves are intentionally stored separately.
+// This keeps future Undo/Redo and move counting focused on the player's solve,
+// while still preserving the exact scramble that created the starting state.
+const moveHistory = [];
+let scrambleHistory = [];
+
+function cloneHistoryEntry(entry) {
+  return JSON.parse(JSON.stringify(entry));
+}
+
+function emitHistoryChange() {
+  window.dispatchEvent(new CustomEvent('rubik-history-change', {
+    detail: {
+      moves: moveHistory.map(cloneHistoryEntry),
+      scramble: [...scrambleHistory]
+    }
+  }));
+}
+
+function recordStandardMove(move, source = 'user', emit = true) {
+  const parsed = normalizeMove(move);
+  const def = MOVE_DEFS[parsed.face];
+  const entry = {
+    kind: 'move',
+    move: parsed.token,
+    face: parsed.face,
+    axis: def.axis,
+    layer: def.layer,
+    quarterTurns: def.direction * moveQuarterTurns(parsed.token),
+    source
+  };
+  moveHistory.push(entry);
+  if (emit) emitHistoryChange();
+  return cloneHistoryEntry(entry);
+}
+
+function recordLayerMove(axis, layer, quarterTurns, source = 'drag', emit = true) {
+  if (!['x','y','z'].includes(axis)) throw new Error(`Invalid history axis: ${axis}`);
+  if (![-1,0,1].includes(layer)) throw new Error(`Invalid history layer: ${layer}`);
+  if (!Number.isInteger(quarterTurns) || quarterTurns === 0) {
+    throw new Error(`Invalid history quarterTurns: ${quarterTurns}`);
+  }
+  const entry = {
+    kind: 'layer',
+    axis,
+    layer,
+    quarterTurns,
+    source
+  };
+  moveHistory.push(entry);
+  if (emit) emitHistoryChange();
+  return cloneHistoryEntry(entry);
+}
+
+function clearMoveHistory(emit = true) {
+  moveHistory.length = 0;
+  if (emit) emitHistoryChange();
+}
+
+function clearAllHistory(emit = true) {
+  moveHistory.length = 0;
+  scrambleHistory = [];
+  if (emit) emitHistoryChange();
+}
+
+function getMoveHistory() {
+  return moveHistory.map(cloneHistoryEntry);
+}
+
+function getScrambleHistory() {
+  return [...scrambleHistory];
+}
+
+const moveCounterEl = document.getElementById('moveCounter');
+
+function toPersianDigits(value) {
+  return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
+}
+
+function getMoveCount() {
+  return moveHistory.length;
+}
+
+function updateMoveCounter() {
+  if (!moveCounterEl) return;
+  moveCounterEl.textContent = `حرکت: ${toPersianDigits(getMoveCount())}`;
+}
+
+window.addEventListener('rubik-history-change', updateMoveCounter);
+
+const timerDisplayEl = document.getElementById('timerDisplay');
+
+const timerState = {
+  status: 'idle', // idle | armed | running | stopped
+  startedAt: 0,
+  elapsedMs: 0,
+  rafId: null
+};
+
+function formatElapsedTime(ms) {
+  const totalTenths = Math.floor(Math.max(0, ms) / 100);
+  const minutes = Math.floor(totalTenths / 600);
+  const seconds = Math.floor((totalTenths % 600) / 10);
+  const tenths = totalTenths % 10;
+  return `${minutes}:${String(seconds).padStart(2, '0')}.${tenths}`;
+}
+
+function getTimerElapsedMs() {
+  if (timerState.status === 'running') {
+    return timerState.elapsedMs + (performance.now() - timerState.startedAt);
+  }
+  return timerState.elapsedMs;
+}
+
+function updateTimerDisplay() {
+  if (!timerDisplayEl) return;
+  timerDisplayEl.textContent = `زمان: ${toPersianDigits(formatElapsedTime(getTimerElapsedMs()))}`;
+}
+
+function timerTick() {
+  updateTimerDisplay();
+  if (timerState.status === 'running') {
+    timerState.rafId = requestAnimationFrame(timerTick);
+  } else {
+    timerState.rafId = null;
+  }
+}
+
+function cancelTimerFrame() {
+  if (timerState.rafId != null) {
+    cancelAnimationFrame(timerState.rafId);
+    timerState.rafId = null;
+  }
+}
+
+function resetSolveTimer(status = 'idle') {
+  cancelTimerFrame();
+  timerState.status = status;
+  timerState.startedAt = 0;
+  timerState.elapsedMs = 0;
+  updateTimerDisplay();
+  window.dispatchEvent(new CustomEvent('rubik-timer-change', {
+    detail: { status: timerState.status, elapsedMs: 0 }
+  }));
+}
+
+function armSolveTimer() {
+  resetSolveTimer('armed');
+}
+
+function startSolveTimer() {
+  if (timerState.status !== 'armed') return false;
+  timerState.status = 'running';
+  timerState.startedAt = performance.now();
+  timerState.elapsedMs = 0;
+  timerTick();
+  window.dispatchEvent(new CustomEvent('rubik-timer-change', {
+    detail: { status: timerState.status, elapsedMs: 0 }
+  }));
+  return true;
+}
+
+function stopSolveTimer() {
+  if (timerState.status !== 'running') return false;
+  timerState.elapsedMs += performance.now() - timerState.startedAt;
+  timerState.startedAt = 0;
+  timerState.status = 'stopped';
+  cancelTimerFrame();
+  updateTimerDisplay();
+  window.dispatchEvent(new CustomEvent('rubik-timer-change', {
+    detail: { status: timerState.status, elapsedMs: timerState.elapsedMs }
+  }));
+  return true;
+}
+
+function getTimerState() {
+  return {
+    status: timerState.status,
+    elapsedMs: getTimerElapsedMs()
+  };
+}
+
+window.addEventListener('rubik-history-change', () => {
+  if (timerState.status === 'armed' && getMoveCount() > 0) {
+    startSolveTimer();
+  }
+});
+
+window.addEventListener('rubik-solved-change', e => {
+  if (e.detail?.solved && timerState.status === 'running') {
+    stopSolveTimer();
+    const record = processRealSolveRecord(timerState.elapsedMs);
+    openSolveResult({
+      elapsedMs: timerState.elapsedMs,
+      moves: getMoveCount(),
+      ...record
+    });
+  }
+});
+
+function runHistorySelfTests() {
+  const savedMoves = getMoveHistory();
+  const savedScramble = getScrambleHistory();
+  moveHistory.length = 0;
+  scrambleHistory = [];
+
+  recordStandardMove('R', 'test', false);
+  recordStandardMove("U'", 'test', false);
+  recordLayerMove('x', 0, 1, 'test', false);
+  console.assert(moveHistory.length === 3, 'History did not record all test moves');
+  console.assert(moveHistory[0].move === 'R', 'History did not preserve standard notation');
+  console.assert(moveHistory[2].kind === 'layer' && moveHistory[2].layer === 0, 'History did not preserve a middle-layer move');
+
+  moveHistory.length = 0;
+  moveHistory.push(...savedMoves.map(cloneHistoryEntry));
+  scrambleHistory = [...savedScramble];
+}
+
+runHistorySelfTests();
+
+function runMoveEngineSelfTests() {
+  const solved = cloneLogicalState();
+  const solvedSig = logicalStateSignature(solved);
+  const faces = Object.keys(MOVE_DEFS);
+
+  for (const face of faces) {
+    const test = cloneLogicalState();
+    applyLogicalSequence(`${face} ${face}'`, test);
+    console.assert(logicalStateSignature(test) === solvedSig, `${face} + ${face}' did not restore state`);
+
+    const fourTurns = cloneLogicalState();
+    applyLogicalSequence(`${face} ${face} ${face} ${face}`, fourTurns);
+    console.assert(logicalStateSignature(fourTurns) === solvedSig, `${face} x4 did not restore state`);
+
+    const doubleTurns = cloneLogicalState();
+    applyLogicalSequence(`${face}2 ${face}2`, doubleTurns);
+    console.assert(logicalStateSignature(doubleTurns) === solvedSig, `${face}2 x2 did not restore state`);
+  }
+
+  const sequence = "R U R' U' F2 L D' B";
+  const inverse = parseMoveSequence(sequence).reverse().map(inverseMove).join(' ');
+  const combo = cloneLogicalState();
+  applyLogicalSequence(sequence, combo);
+  applyLogicalSequence(inverse, combo);
+  console.assert(logicalStateSignature(combo) === solvedSig, 'Sequence + inverse did not restore state');
+
+  console.assert(validateLogicalState(), 'Live logical state failed validation after move-engine tests');
+  return true;
+}
+
+runMoveEngineSelfTests();
+
+group.rotation.x = -0.62;
+group.rotation.y = 0.78;
+
+// ---------- Stage 3: synchronized visual + logical rotations ----------
+let isAnimating = false;
+let isScrambling = false;
+let isSnapSettling = false;
+
+function isGameInteractionLocked() {
+  return isScrambling || isSnapSettling;
+}
+
+function roundedBasisFromQuaternion(quaternion) {
+  const roundVector = v => ({
+    x: Math.round(v.x),
+    y: Math.round(v.y),
+    z: Math.round(v.z)
+  });
+  return {
+    x: roundVector(new THREE.Vector3(1,0,0).applyQuaternion(quaternion)),
+    y: roundVector(new THREE.Vector3(0,1,0).applyQuaternion(quaternion)),
+    z: roundVector(new THREE.Vector3(0,0,1).applyQuaternion(quaternion))
+  };
+}
+
+function validateVisualLogicalSync() {
+  const eps = 0.001;
+  for (const c of cubies) {
+    const lp = c.logical.position;
+    if (Math.abs(c.mesh.position.x - lp.x) > eps ||
+        Math.abs(c.mesh.position.y - lp.y) > eps ||
+        Math.abs(c.mesh.position.z - lp.z) > eps) return false;
+
+    const visualOrientation = roundedBasisFromQuaternion(c.mesh.quaternion);
+    for (const key of ['x','y','z']) {
+      const a = visualOrientation[key];
+      const b = c.logical.orientation[key];
+      if (a.x !== b.x || a.y !== b.y || a.z !== b.z) return false;
+    }
+  }
+  return validateLogicalState();
+}
+
+function applyCompletedRotationToLogicalState(axis, layerValue, quarterTurns) {
+  const count = Math.abs(quarterTurns);
+  const direction = Math.sign(quarterTurns);
+  for (let i = 0; i < count; i++) {
+    applyLogicalLayerQuarterTurn(axis, layerValue, direction);
+  }
+}
+
+function rotateLayer(axis, layerValue, direction, duration, syncLogical = true) {
+  return new Promise(resolve => {
+    const eps = 0.1;
+    const affected = cubies.filter(c => Math.abs(c.mesh.position[axis] - layerValue) < eps);
+
+    const pivot = new THREE.Group();
+    group.add(pivot);
+    affected.forEach(c => pivot.attach(c.mesh));
+
+    const axisVec = axis === 'x' ? new THREE.Vector3(1,0,0)
+                   : axis === 'y' ? new THREE.Vector3(0,1,0)
+                   : new THREE.Vector3(0,0,1);
+    const targetAngle = direction * Math.PI/2;
+    let startTime = null;
+
+    function step(time) {
+      if (!startTime) startTime = time;
+      const t = Math.min((time - startTime)/duration, 1);
+      const eased = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; // ease-in-out
+      pivot.rotation.set(0,0,0);
+      pivot.rotateOnWorldAxis(axisVec, targetAngle*eased);
+      requestRender();
+
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        affected.forEach(c => {
+          group.attach(c.mesh);
+          c.mesh.position.x = Math.round(c.mesh.position.x);
+          c.mesh.position.y = Math.round(c.mesh.position.y);
+          c.mesh.position.z = Math.round(c.mesh.position.z);
+          c.mesh.quaternion.normalize();
+        });
+        group.remove(pivot);
+        if (syncLogical) applyCompletedRotationToLogicalState(axis, layerValue, direction);
+        console.assert(validateVisualLogicalSync(), 'Visual/logical cube state desynchronized after layer rotation');
+        resolve();
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+async function executeMoveAnimated(move, duration = 130) {
+  if (isAnimating) return false;
+  const parsed = normalizeMove(move);
+  const def = MOVE_DEFS[parsed.face];
+  const turns = moveQuarterTurns(parsed.token);
+  const quarterCount = Math.abs(turns);
+  const turnSign = Math.sign(turns);
+
+  isAnimating = true;
+  scrambleBtn.disabled = true;
+  resetBtn.disabled = true;
+  try {
+    for (let i = 0; i < quarterCount; i++) {
+      await rotateLayer(def.axis, def.layer, def.direction * turnSign, duration, true);
+    }
+    updateSolvedState();
+    recordStandardMove(parsed.token, 'api');
+    console.assert(validateVisualLogicalSync(), `Visual/logical mismatch after ${parsed.token}`);
+    return true;
+  } finally {
+    isAnimating = false;
+    scrambleBtn.disabled = false;
+    resetBtn.disabled = false;
+  }
+}
+
+async function executeMoveSequenceAnimated(sequence, duration = 130) {
+  if (isAnimating) return false;
+  const moves = parseMoveSequence(sequence);
+  isAnimating = true;
+  scrambleBtn.disabled = true;
+  resetBtn.disabled = true;
+  try {
+    for (const move of moves) {
+      const parsed = normalizeMove(move);
+      const def = MOVE_DEFS[parsed.face];
+      const turns = moveQuarterTurns(parsed.token);
+      const quarterCount = Math.abs(turns);
+      const turnSign = Math.sign(turns);
+      for (let i = 0; i < quarterCount; i++) {
+        await rotateLayer(def.axis, def.layer, def.direction * turnSign, duration, true);
+      }
+      updateSolvedState();
+      recordStandardMove(parsed.token, 'api-sequence', false);
+    }
+    if (moves.length) emitHistoryChange();
+    console.assert(validateVisualLogicalSync(), 'Visual/logical mismatch after animated move sequence');
+    return true;
+  } finally {
+    isAnimating = false;
+    scrambleBtn.disabled = false;
+    resetBtn.disabled = false;
+  }
+}
+
+// ---------- Stage 13: competition-style scramble flow ----------
+const SCRAMBLE_ANIMATION_MS = 100;
+const SCRAMBLE_RESET_MS = 150;
+const SCRAMBLE_SOLVED_GLIMPSE_MS = 50;
+const MIN_ACCEPTED_SCRAMBLE_TOKENS = 10;
+
+const FALLBACK_SCRAMBLE_FACES = ['R','L','U','D','F','B'];
+const FALLBACK_SCRAMBLE_SUFFIXES = ['', "'", '2'];
+const FALLBACK_FACE_AXIS = Object.freeze({ R:'x', L:'x', U:'y', D:'y', F:'z', B:'z' });
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function waitForPaintFrames(count = 2) {
+  return new Promise(resolve => {
+    const step = () => {
+      if (--count <= 0) resolve();
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+function generateFallbackScramble(movesCount = 25) {
+  const result = [];
+  let previousFace = null;
+  let previousAxis = null;
+  let axisRunLength = 0;
+
+  while (result.length < movesCount) {
+    const candidates = FALLBACK_SCRAMBLE_FACES.filter(face => {
+      if (face === previousFace) return false;
+      const axis = FALLBACK_FACE_AXIS[face];
+      if (axis === previousAxis && axisRunLength >= 2) return false;
+      return true;
+    });
+
+    const face = candidates[Math.floor(Math.random() * candidates.length)];
+    const suffix = FALLBACK_SCRAMBLE_SUFFIXES[Math.floor(Math.random() * FALLBACK_SCRAMBLE_SUFFIXES.length)];
+    result.push(face + suffix);
+
+    const axis = FALLBACK_FACE_AXIS[face];
+    axisRunLength = axis === previousAxis ? axisRunLength + 1 : 1;
+    previousAxis = axis;
+    previousFace = face;
+  }
+
+  return result;
+}
+
+function getCompetitionStyleScramble() {
+  // Primary path: csTimer/min2phase random-state 3x3 generator.
+  if (window.scramblers && window.scramblers["333"] &&
+      typeof window.scramblers["333"].getRandomScramble === 'function') {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const raw = window.scramblers["333"].getRandomScramble();
+      const moves = parseMoveSequence(raw);
+      if (moves.length >= MIN_ACCEPTED_SCRAMBLE_TOKENS) {
+        return { moves, mode:'random-state' };
+      }
+    }
+  }
+
+  // Safety fallback: the game still works if the external scrambler cannot load.
+  console.warn('Random-state scrambler unavailable; using local fallback scramble.');
+  return { moves:generateFallbackScramble(25), mode:'fallback' };
+}
+
+function setCubeVisualAndLogicalSolved() {
+  cubies.forEach(c => {
+    if (c.mesh.parent !== group) group.attach(c.mesh);
+    c.mesh.position.copy(c.initPos);
+    c.mesh.quaternion.copy(c.initQuat);
+    c.mesh.scale.set(1, 1, 1);
+  });
+
+  group.children
+    .filter(child => child && !cubies.some(c => c.mesh === child))
+    .forEach(child => {
+      if (child.type === 'Group') group.remove(child);
+    });
+
+  resetLogicalState();
+  updateSolvedState();
+  requestRender();
+}
+
+async function animateCubeToSolved(duration = SCRAMBLE_RESET_MS) {
+  const starts = cubies.map(c => ({
+    cubie:c,
+    position:c.mesh.position.clone(),
+    quaternion:c.mesh.quaternion.clone()
+  }));
+
+  await new Promise(resolve => {
+    let startTime = null;
+
+    function frame(time) {
+      if (startTime === null) startTime = time;
+      const t = duration <= 0 ? 1 : Math.min((time - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+
+      starts.forEach(({ cubie, position, quaternion }) => {
+        cubie.mesh.position.lerpVectors(position, cubie.initPos, eased);
+        cubie.mesh.quaternion.slerpQuaternions(quaternion, cubie.initQuat, eased);
+      });
+      requestRender();
+
+      if (t < 1) {
+        requestAnimationFrame(frame);
+      } else {
+        setCubeVisualAndLogicalSolved();
+        resolve();
+      }
+    }
+
+    requestAnimationFrame(frame);
+  });
+}
+
+async function showSolvedStateBeforeScramble() {
+  // Keep the solved cube on-screen long enough to be visually registered.
+  await waitForPaintFrames(2);
+  await sleep(SCRAMBLE_SOLVED_GLIMPSE_MS);
+}
+
+async function scrambleCube() {
+  if (isAnimating) return false;
+
+  setHelpOpen(false);
+  closeSolveResult();
+
+  // Starting a new scramble cancels any current solve without touching personal best.
+  resetInteractionState();
+  resetSolveTimer('idle');
+  moveHistory.length = 0;
+  scrambleHistory = [];
+  emitHistoryChange();
+
+  isScrambling = true;
+  isAnimating = true;
+  scrambleBtn.disabled = true;
+  resetBtn.disabled = true;
+  helpToggle.disabled = true;
+  timerDisplayEl.style.pointerEvents = 'none';
+
+  try {
+    // Preserve user's camera, zoom and whole-cube viewing angle.
+    // Only the cubies return briefly to solved state.
+    await animateCubeToSolved(SCRAMBLE_RESET_MS);
+    await showSolvedStateBeforeScramble();
+
+    const generated = getCompetitionStyleScramble();
+    const moves = generated.moves;
+
+    scrambleHistory = [...moves];
+    emitHistoryChange();
+
+    for (const move of moves) {
+      const parsed = normalizeMove(move);
+      const def = MOVE_DEFS[parsed.face];
+      const turns = moveQuarterTurns(parsed.token);
+      const quarterCount = Math.abs(turns);
+      const turnSign = Math.sign(turns);
+
+      for (let i = 0; i < quarterCount; i++) {
+        await rotateLayer(
+          def.axis,
+          def.layer,
+          def.direction * turnSign,
+          SCRAMBLE_ANIMATION_MS,
+          true
+        );
+      }
+
+      updateSolvedState();
+    }
+
+    console.assert(validateVisualLogicalSync(), 'Visual/logical mismatch after Stage 13 scramble');
+    console.assert(!isCubeSolved(), 'Stage 13 scramble must not finish solved');
+
+    // Scramble moves never count as player moves.
+    moveHistory.length = 0;
+    emitHistoryChange();
+
+    // The user can inspect/orbit/zoom freely; first real layer move starts timer.
+    armSolveTimer();
+
+    window.dispatchEvent(new CustomEvent('rubik-scramble-ready', {
+      detail: {
+        mode:generated.mode,
+        scramble:[...moves]
+      }
+    }));
+
+    return true;
+  } catch (error) {
+    console.error('Stage 13 scramble failed safely:', error);
+
+    // Never leave the cube half-scrambled or locked.
+    setCubeVisualAndLogicalSolved();
+    clearAllHistory(false);
+    resetSolveTimer('idle');
+    emitHistoryChange();
+    return false;
+  } finally {
+    isAnimating = false;
+    isScrambling = false;
+    scrambleBtn.disabled = false;
+    resetBtn.disabled = false;
+    helpToggle.disabled = false;
+    timerDisplayEl.style.pointerEvents = '';
+  }
+}
+
+function resetInteractionState() {
+  activePointers.clear();
+  lastPinchDist = null;
+  isDragging = false;
+  cubieDrag = null;
+  liveMove = null;
+}
+
+function clearPointerInteractionState() {
+  activePointers.clear();
+  lastPinchDist = null;
+  isDragging = false;
+  cubieDrag = null;
+}
+
+function cancelInteractionSafely() {
+  if (liveMove && !isSnapSettling) {
+    cancelLiveMoveToStart();
+  }
+
+  clearPointerInteractionState();
+}
+
+function resetCube() {
+  if (isAnimating) return false;
+  closeSolveResult();
+
+  cubies.forEach(c => {
+    if (c.mesh.parent !== group) group.attach(c.mesh);
+    c.mesh.position.copy(c.initPos);
+    c.mesh.quaternion.copy(c.initQuat);
+    c.mesh.scale.set(1, 1, 1);
+  });
+
+  group.children
+    .filter(child => child !== undefined && !cubies.some(c => c.mesh === child))
+    .forEach(child => {
+      if (child.type === 'Group') group.remove(child);
+    });
+
+  resetLogicalState();
+  clearAllHistory(false);
+  resetInteractionState();
+  resetSolveTimer('idle');
+
+  isAnimating = false;
+  isSnapSettling = false;
+  scrambleBtn.disabled = false;
+  resetBtn.disabled = false;
+
+  const solved = updateSolvedState();
+  emitHistoryChange();
+
+  const logicalValid = validateLogicalState();
+  const synchronized = validateVisualLogicalSync();
+
+  console.assert(logicalValid, 'Logical cube state failed validation after reset');
+  console.assert(synchronized, 'Visual/logical cube state desynchronized after reset');
+  console.assert(solved, 'Cube must be solved after reset');
+  console.assert(moveHistory.length === 0, 'Move history must be empty after reset');
+  console.assert(scrambleHistory.length === 0, 'Scramble history must be empty after reset');
+
+  window.dispatchEvent(new CustomEvent('rubik-reset', {
+    detail: { solved, logicalValid, synchronized }
+  }));
+
+  requestRender();
+  return logicalValid && synchronized && solved;
+}
+
+const scrambleBtn = document.getElementById('scrambleBtn');
+const resetBtn = document.getElementById('resetBtn');
+scrambleBtn.addEventListener('click', () => scrambleCube());
+resetBtn.addEventListener('click', resetCube);
+
+// ---------- Orbit (drag empty space) + Turn (drag a cubie face) + Zoom (pinch / wheel) ----------
+renderer.domElement.style.touchAction = 'none'; // stop the browser from hijacking touch gestures
+
+let MIN_DIST = fitDistance * 0.75, MAX_DIST = fitDistance * 1.6;
+function clampCameraDistance() {
+  const dist = camera.position.length();
+  if (dist < MIN_DIST) camera.position.setLength(MIN_DIST);
+  else if (dist > MAX_DIST) camera.position.setLength(MAX_DIST);
+}
+
+const raycaster = new THREE.Raycaster();
+const cubieMeshes = () => cubies.map(c => c.mesh);
+
+function pickCubie(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(cubieMeshes(), false);
+  if (hits.length === 0) return null;
+  const hit = hits[0];
+  // face normal in the cube's own intrinsic frame (mesh's rotation relative to group)
+  const n = hit.face.normal.clone().applyQuaternion(hit.object.quaternion).round();
+  let normalAxis, normalSign;
+  if (Math.abs(n.x) > 0.5) { normalAxis = 'x'; normalSign = Math.sign(n.x); }
+  else if (Math.abs(n.y) > 0.5) { normalAxis = 'y'; normalSign = Math.sign(n.y); }
+  else { normalAxis = 'z'; normalSign = Math.sign(n.z); }
+  const gridPos = {
+    x: Math.round(hit.object.position.x),
+    y: Math.round(hit.object.position.y),
+    z: Math.round(hit.object.position.z)
+  };
+  return { normalAxis, normalSign, gridPos };
+}
+
+function axisVec3(axis) {
+  return axis === 'x' ? new THREE.Vector3(1,0,0) : axis === 'y' ? new THREE.Vector3(0,1,0) : new THREE.Vector3(0,0,1);
+}
+
+let isDragging = false, prevX = 0, prevY = 0;
+const activePointers = new Map();
+let lastPinchDist = null;
+
+let cubieDrag = null; // {pointerId, normalAxis, gridPos, startX, startY, locked, rotAxis, velScreenDir}
+let liveMove = null;  // {pivot, affected, axisVecLocal, angle}
+
+function pinchDistance() {
+  const pts = [...activePointers.values()];
+  const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
+  return Math.hypot(dx, dy);
+}
+
+function beginLiveMove(rotAxis, layerValue) {
+  const eps = 0.1;
+  const affected = cubies.filter(c => Math.abs(c.mesh.position[rotAxis] - layerValue) < eps);
+  const pivot = new THREE.Group();
+  group.add(pivot);
+  affected.forEach(c => pivot.attach(c.mesh));
+  liveMove = { pivot, affected, axisVecLocal: axisVec3(rotAxis), angle: 0 };
+  isAnimating = true;
+  scrambleBtn.disabled = true; resetBtn.disabled = true;
+}
+
+function updateLiveMove(angle) {
+  if (!liveMove) return;
+  liveMove.angle = angle;
+  liveMove.pivot.rotation.set(0,0,0);
+  liveMove.pivot.rotateOnWorldAxis(liveMove.axisVecLocal, angle);
+  requestRender();
+}
+
+function cancelLiveMoveToStart() {
+  if (!liveMove) return;
+
+  const { pivot, affected } = liveMove;
+
+  // Return the partially dragged layer to its exact pre-drag state.
+  pivot.rotation.set(0,0,0);
+
+  affected.forEach(c => {
+    group.attach(c.mesh);
+    c.mesh.position.x = Math.round(c.mesh.position.x);
+    c.mesh.position.y = Math.round(c.mesh.position.y);
+    c.mesh.position.z = Math.round(c.mesh.position.z);
+    c.mesh.quaternion.normalize();
+  });
+
+  group.remove(pivot);
+  liveMove = null;
+
+  // No logical move, no history entry, no move-count increment.
+  // The solve timer intentionally keeps running if the solve had already started.
+  isAnimating = false;
+  scrambleBtn.disabled = false;
+  resetBtn.disabled = false;
+
+  console.assert(
+    validateVisualLogicalSync(),
+    'Visual/logical cube state desynchronized after cancelling a partial drag'
+  );
+  requestRender();
+}
+
+function endLiveMove() {
+  if (!liveMove) return;
+  const { pivot, affected, axisVecLocal, angle } = liveMove;
+  const completedAxis = cubieDrag.rotAxis;
+  const completedLayer = cubieDrag.layerValue;
+  const targetAngle = Math.round(angle / (Math.PI/2)) * (Math.PI/2);
+  const startAngle = angle;
+  const duration = 130;
+  let startTime = null;
+
+  isSnapSettling = true;
+  function step(time) {
+    if (!startTime) startTime = time;
+    const t = Math.min((time - startTime)/duration, 1);
+    const cur = startAngle + (targetAngle - startAngle) * t;
+    pivot.rotation.set(0,0,0);
+    pivot.rotateOnWorldAxis(axisVecLocal, cur);
+    requestRender();
+    if (t < 1) {
+      requestAnimationFrame(step);
+    } else {
+      affected.forEach(c => {
+        group.attach(c.mesh);
+        c.mesh.position.x = Math.round(c.mesh.position.x);
+        c.mesh.position.y = Math.round(c.mesh.position.y);
+        c.mesh.position.z = Math.round(c.mesh.position.z);
+        c.mesh.quaternion.normalize();
+      });
+      group.remove(pivot);
+      const quarterTurns = Math.round(targetAngle / (Math.PI/2));
+      if (quarterTurns !== 0) {
+        applyCompletedRotationToLogicalState(completedAxis, completedLayer, quarterTurns);
+        recordLayerMove(completedAxis, completedLayer, quarterTurns, 'drag');
+        updateSolvedState();
+      }
+      liveMove = null;
+      console.assert(validateVisualLogicalSync(), 'Visual/logical cube state desynchronized after manual drag');
+      isAnimating = false;
+      isSnapSettling = false;
+      scrambleBtn.disabled = false; resetBtn.disabled = false;
+    }
+  }
+  requestAnimationFrame(step);
+}
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (isScrambling || isSnapSettling) return;
+  renderer.domElement.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+  if (activePointers.size === 1 && !isAnimating) {
+    const picked = pickCubie(e.clientX, e.clientY);
+    if (picked) {
+      cubieDrag = { ...picked, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, locked: false };
+      isDragging = false;
+    } else {
+      cubieDrag = null;
+      isDragging = true; prevX = e.clientX; prevY = e.clientY;
+    }
+  } else if (activePointers.size === 2) {
+    // Stage 14: if a second finger appears during a layer drag,
+    // cancel the partial turn cleanly, then switch exclusively to pinch zoom.
+    if (liveMove) cancelLiveMoveToStart();
+
+    isDragging = false;
+    cubieDrag = null;
+    lastPinchDist = pinchDistance();
+  }
+});
+
+window.addEventListener('pointermove', e => {
+  if (isScrambling) return;
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+  if (activePointers.size === 2) {
+    const dist = pinchDistance();
+    if (lastPinchDist != null) {
+      camera.position.multiplyScalar(lastPinchDist / dist);
+      clampCameraDistance();
+      requestRender();
+    }
+    lastPinchDist = dist;
+    return;
+  }
+
+  if (cubieDrag && activePointers.size === 1) {
+    const dx = e.clientX - cubieDrag.startX, dy = e.clientY - cubieDrag.startY;
+
+    if (!cubieDrag.locked) {
+      if (Math.hypot(dx, dy) < 10) return; // wait for a clear drag before deciding the axis
+
+      cubieDrag.locked = true;
+
+      const camRight = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+      const camUp = new THREE.Vector3(0,1,0).applyQuaternion(camera.quaternion);
+      const toScreen = (worldVec) => ({ x: worldVec.dot(camRight), y: -worldVec.dot(camUp) });
+
+      const tangentAxes = ['x','y','z'].filter(a => a !== cubieDrag.normalAxis);
+      let bestAxis = null, bestScore = -1;
+      tangentAxes.forEach(t => {
+        const worldDir = axisVec3(t).applyQuaternion(group.quaternion);
+        const s = toScreen(worldDir);
+        const len = Math.hypot(s.x, s.y) || 1;
+        const score = Math.abs((s.x*dx + s.y*dy) / len);
+        if (score > bestScore) { bestScore = score; bestAxis = t; }
+      });
+
+      // rotate around the OTHER tangent axis (not the one the drag aligns with)
+      const rotAxis = tangentAxes.find(a => a !== bestAxis);
+      const layerValue = cubieDrag.gridPos[rotAxis];
+
+      // the screen direction a positive rotation would move this exact point in
+      const rotWorldDir = axisVec3(rotAxis).applyQuaternion(group.quaternion);
+      const pointWorld = new THREE.Vector3(cubieDrag.gridPos.x, cubieDrag.gridPos.y, cubieDrag.gridPos.z).applyQuaternion(group.quaternion);
+      const velocity = rotWorldDir.clone().cross(pointWorld);
+      const velScreen = toScreen(velocity);
+      const velLen = Math.hypot(velScreen.x, velScreen.y) || 1;
+
+      cubieDrag.rotAxis = rotAxis;
+      cubieDrag.layerValue = layerValue;
+      cubieDrag.velScreenDir = { x: velScreen.x/velLen, y: velScreen.y/velLen };
+
+      // Stage 14: a genuine layer-drag attempt starts the solve timer,
+      // even if the layer is later released below 45° and snaps back.
+      if (timerState.status === 'armed') {
+        startSolveTimer();
+      }
+
+      beginLiveMove(rotAxis, layerValue);
+    }
+
+    if (cubieDrag.rotAxis) {
+      const signedPixels = dx * cubieDrag.velScreenDir.x + dy * cubieDrag.velScreenDir.y;
+      let angle = signedPixels * 0.011; // drag sensitivity
+      angle = Math.max(-Math.PI*1.4, Math.min(Math.PI*1.4, angle));
+      updateLiveMove(angle);
+    }
+    return;
+  }
+
+  if (isDragging && activePointers.size === 1) {
+    const dx = e.clientX - prevX, dy = e.clientY - prevY;
+    group.rotation.y -= dx * 0.008;
+    group.rotation.x += dy * 0.008;
+    requestRender();
+    prevX = e.clientX; prevY = e.clientY;
+  }
+});
+
+function updatePointerStateAfterRelease(e) {
+  activePointers.delete(e.pointerId);
+  cubieDrag = null;
+
+  if (activePointers.size === 0) {
+    isDragging = false;
+    lastPinchDist = null;
+  } else if (activePointers.size === 1) {
+    const remaining = [...activePointers.values()][0];
+    isDragging = true;
+    prevX = remaining.x;
+    prevY = remaining.y;
+    lastPinchDist = null;
+  }
+}
+
+function isCubieDragOwner(e) {
+  return !cubieDrag || e.pointerId === cubieDrag.pointerId;
+}
+
+function releasePointer(e) {
+  if (!isCubieDragOwner(e)) return;
+  if (!activePointers.has(e.pointerId)) return;
+
+  if (cubieDrag && cubieDrag.locked) {
+    endLiveMove();
+  }
+  updatePointerStateAfterRelease(e);
+}
+
+function cancelPointer(e) {
+  if (!isCubieDragOwner(e)) return;
+  if (!activePointers.has(e.pointerId)) return;
+
+  cancelInteractionSafely();
+}
+
+window.addEventListener('pointerup', releasePointer);
+window.addEventListener('pointercancel', cancelPointer);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) cancelInteractionSafely();
+});
+
+window.addEventListener('pagehide', () => {
+  cancelInteractionSafely();
+});
+
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted) return;
+  cancelInteractionSafely();
+  if (typeof syncViewportLayout === 'function') syncViewportLayout();
+  requestRender();
+});
+
+window.addEventListener('blur', () => {
+  if (document.hidden) cancelInteractionSafely();
+});
+
+renderer.domElement.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (isScrambling || isSnapSettling) return;
+  camera.position.multiplyScalar(1 + e.deltaY * 0.0009);
+  clampCameraDistance();
+  requestRender();
+}, { passive:false });
+
+function syncViewportLayout() {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  if (!width || !height) return;
+
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+
+  const newFit = computeFitDistance(camera.aspect);
+  const scale = newFit / fitDistance;
+  camera.position.multiplyScalar(scale);
+  fitDistance = newFit;
+  MIN_DIST = fitDistance * 0.75;
+  MAX_DIST = fitDistance * 1.6;
+  clampCameraDistance();
+  requestRender();
+
+  void document.documentElement.offsetHeight;
+}
+
+window.addEventListener('resize', syncViewportLayout);
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncViewportLayout);
+}
+
+window.rubikStage10 = Object.freeze({
+  executeMove: executeMoveAnimated,
+  executeSequence: executeMoveSequenceAnimated,
+  generateScramble: generateFallbackScramble,
+  scramble: scrambleCube,
+  getScrambleConfig: () => ({
+    preferredMode:'random-state',
+    scrambleAnimationMs:SCRAMBLE_ANIMATION_MS,
+    resetAnimationMs:SCRAMBLE_RESET_MS,
+    solvedGlimpseMs:SCRAMBLE_SOLVED_GLIMPSE_MS
+  }),
+  getLogicalState: () => cloneLogicalState(),
+  getHistory: getMoveHistory,
+  getMoveCount,
+  getTimer: getTimerState,
+  getLastSolveResult: () => lastSolveResult ? { ...lastSolveResult } : null,
+  getScramble: getScrambleHistory,
+  clearHistory: clearMoveHistory,
+  isSolved: () => cubeState.isSolved,
+  checkSolved: () => updateSolvedState(false),
+  validateSync: validateVisualLogicalSync,
+  reset: resetCube
+});
+window.rubikStage9 = window.rubikStage10;
+window.rubikStage6 = window.rubikStage10;
+
+cubeState.isSolved = isLogicalCubeSolved();
+console.assert(cubeState.isSolved, 'Initial cube should be solved');
+console.assert(validateVisualLogicalSync(), 'Initial visual/logical cube state is not synchronized');
+updateMoveCounter();
+updateTimerDisplay();
+
+function animate(){
+  requestAnimationFrame(animate);
+  if (!needsRender) return;
+  needsRender = false;
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => console.log('Service Worker registered'))
+      .catch((error) => console.error('Service Worker registration failed:', error));
+  });
+}
+</script>
+</body>
+</html>
