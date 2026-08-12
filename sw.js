@@ -8,7 +8,7 @@ const CORE_ASSETS = [
   './icon-512.png',
   './vendor/three.min.js',
   './vendor/scramble_333.js',
-  './vendor/Vazirmatn[wght].woff2'
+  './vendor/Vazirmatn-Regular.woff2'
 ];
 
 self.addEventListener('install', (event) => {
