@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zubik-pwa-v16';
+const CACHE_NAME = 'zubik-pwa-v17';
 
 const CORE_ASSETS = [
   './',
