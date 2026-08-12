@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zubik-pwa-v11';
+const CACHE_NAME = 'zubik-pwa-v12';
 
 const CORE_ASSETS = [
   './',
@@ -7,7 +7,8 @@ const CORE_ASSETS = [
   './icon-192.png',
   './icon-512.png',
   './vendor/three.min.js',
-  './vendor/scramble_333.js'
+  './vendor/scramble_333.js',
+  './vendor/Vazirmatn[wght].woff2'
 ];
 
 self.addEventListener('install', (event) => {
